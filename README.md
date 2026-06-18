@@ -30,8 +30,7 @@ Sau khi hoàn thành, các bạn cần có khả năng:
 Repo này được chia thành ba phần rõ ràng:
 
 - `src/`: bản scaffold dành cho sinh viên, chứa pseudocode và TODO để hoàn thiện
-- `labs/`: bản triển khai tham chiếu đã chạy được, dùng cho đối chiếu hoặc giảng viên
-- `data/`: dữ liệu benchmark ở root để cả `src/` và `labs/` cùng dùng
+- `data/`: dữ liệu benchmark ở root để dùng cho cả benchmark chuẩn và stress benchmark
 
 ## File và thư mục quan trọng
 
@@ -42,16 +41,14 @@ Repo này được chia thành ba phần rõ ràng:
 - `src/test_agents.py`: test students cần làm pass
 - `data/conversations.json`: benchmark chuẩn gồm 10 hội thoại tiếng Việt
 - `data/advanced_long_context.json`: benchmark dài để làm lộ tác động của compact memory
-- `labs/`: bản solved implementation
 - `lab.txt`: yêu cầu gốc của bài lab
 
 ## Luồng học khuyến nghị
 
 1. Đọc `Guide.md` để hiểu thứ tự triển khai.
 2. Làm trực tiếp trong `src/`.
-3. Chỉ tham chiếu `labs/` khi thật sự cần đối chiếu thiết kế hoặc kiểm tra ý tưởng.
-4. Chạy benchmark để so sánh `Baseline` và `Advanced`.
-5. Đọc `Rubric.md` để tự đánh giá mức hoàn thành của nhóm.
+3. Chạy benchmark để so sánh `Baseline` và `Advanced`.
+4. Đọc `Rubric.md` để tự đánh giá mức hoàn thành của nhóm.
 
 ## Provider hỗ trợ
 
@@ -86,31 +83,24 @@ Khi hoàn thiện bài, benchmark nên cho các cột sau:
 
 ## Setup môi trường
 
-Hiện tại dependency thực tế của bài lab đang được khai báo trong `labs/pyproject.toml`. Vì vậy, kể cả khi các bạn code trong `src/`, cách dựng môi trường nhanh nhất vẫn là dùng file dependency ở `labs/`.
+Các bạn cần chuẩn bị môi trường Python `>= 3.11` và cài các package cần thiết cho LangChain, LangGraph, provider SDK, `python-dotenv`, `tabulate`, và `pytest`.
 
 ```bash
-cd labs
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e .[dev]
+pip install langchain langgraph langchain-openai langchain-google-genai langchain-anthropic langchain-ollama langchain-openrouter python-dotenv tabulate pytest
 ```
 
-Sau đó quay về root repo để làm việc với `src/` và `data/`.
-
-```bash
-cd ..
-```
+Sau đó làm việc trực tiếp với `src/` và `data/` ở root repo.
 
 Nếu các bạn là sinh viên:
 
 - làm bài trong `src/`
 - dùng `data/` làm benchmark input
-- chỉ xem `labs/` sau khi đã tự triển khai hoặc khi cần đối chiếu sâu
 
 Nếu các bạn là giảng viên hoặc reviewer:
 
-- dùng `labs/` để chạy bản tham chiếu
-- dùng `src/` để đánh giá scaffold giao cho sinh viên
+- dùng `src/` để đánh giá scaffold giao cho sinh viên và kết quả hoàn thiện cuối cùng
 
 ## Tài liệu nên đọc tiếp
 

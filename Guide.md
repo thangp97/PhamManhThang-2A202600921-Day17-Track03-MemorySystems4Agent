@@ -1,6 +1,6 @@
 # Hướng dẫn từng bước để hoàn thành Track 3
 
-Tài liệu này hướng dẫn các bạn hoàn thành bài lab theo đúng thứ tự hợp lý. Mục tiêu là làm được bài trong `src/`, không phụ thuộc ngay vào bản solved trong `labs/`.
+Tài liệu này hướng dẫn các bạn hoàn thành bài lab theo đúng thứ tự hợp lý. Mục tiêu là làm được bài trong `src/` với một lộ trình rõ ràng từ setup, memory layer, đến benchmark.
 
 ## Bước 1. Đọc cấu trúc repo
 
@@ -9,15 +9,12 @@ Trước khi code, các bạn cần hiểu repo đang chia trách nhiệm như t
 Trước khi đọc code, hãy dựng môi trường trước:
 
 ```bash
-cd labs
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e .[dev]
-cd ..
+pip install langchain langgraph langchain-openai langchain-google-genai langchain-anthropic langchain-ollama langchain-openrouter python-dotenv tabulate pytest
 ```
 
 - `src/` là phần các bạn phải hoàn thiện
-- `labs/` là bản tham chiếu đã chạy được
 - `data/` là input benchmark dùng chung
 
 Việc đầu tiên nên làm là đọc nhanh các file sau:
@@ -153,7 +150,7 @@ Khi làm phần này, hãy luôn tự hỏi:
 
 File cần làm: `src/benchmark.py`
 
-Benchmark của các bạn phải có **hai phần** giống bản solved:
+Benchmark của các bạn phải có **hai phần**:
 
 ### 6.1. Standard Benchmark
 
@@ -199,18 +196,7 @@ Tối thiểu các bạn cần có test cho:
 
 Đây là phần giúp phân biệt giữa “trông có vẻ chạy được” và “đã kiểm chứng được hành vi memory”.
 
-## Bước 8. Tự so sánh với bản solved
-
-Chỉ sau khi đã tự làm tương đối xong trong `src/`, các bạn mới nên mở `labs/` để so sánh:
-
-- cấu trúc code
-- cách tách lớp memory
-- cách tính benchmark
-- cách hỗ trợ nhiều provider
-
-Không nên mở `labs/` quá sớm nếu mục tiêu là luyện tư duy thiết kế.
-
-## Bước 9. Viết phần phân tích kết quả
+## Bước 8. Viết phần phân tích kết quả
 
 Sau khi benchmark chạy được, các bạn cần viết ngắn gọn:
 
@@ -219,7 +205,7 @@ Sau khi benchmark chạy được, các bạn cần viết ngắn gọn:
 - vì sao compact giúp advanced có lợi thế ở hội thoại dài
 - file memory tăng trưởng ra sao và rủi ro gì đi kèm
 
-## Bước 10. Bonus nếu muốn lên mức 90-100
+## Bước 9. Bonus nếu muốn lên mức 90-100
 
 Các hướng bonus có giá trị:
 

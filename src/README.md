@@ -2,11 +2,10 @@
 
 This `src/` folder is the student version of the lab.
 
-- It mirrors the working implementation in `labs/`
 - It keeps the same high-level structure
 - The Python files are intentionally incomplete and contain pseudocode / TODOs
-- The benchmark structure should stay the same as `labs/`: standard benchmark + long-context stress benchmark
-- The runtime should support the same providers as `labs/`: `openai`, `custom`, `gemini`, `anthropic`, `ollama`, `openrouter`
+- The benchmark structure should include: standard benchmark + long-context stress benchmark
+- The runtime should support these providers: `openai`, `custom`, `gemini`, `anthropic`, `ollama`, `openrouter`
 
 Suggested flow:
 
