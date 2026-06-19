@@ -5,6 +5,7 @@ from pathlib import Path
 
 from model_provider import ProviderConfig
 
+import os
 
 @dataclass
 class LabConfig:
@@ -36,17 +37,51 @@ def load_config(base_dir: Path | None = None) -> LabConfig:
     """
 
     root = (base_dir or Path(__file__).resolve().parent.parent).resolve()
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(root / ".env")
+    except ImportError:
+        pass
 
-    # TODO: read env vars for one of the supported providers.
-    # Example knobs:
-    # - LLM_PROVIDER / LLM_MODEL
-    # - OPENAI_API_KEY
-    # - GEMINI_API_KEY
-    # - ANTHROPIC_API_KEY
-    # - OLLAMA_BASE_URL
-    # - OPENROUTER_API_KEY
-    # - CUSTOM_BASE_URL / CUSTOM_API_KEY
-    # TODO: create `root / "state"`.
-    # TODO: choose sensible defaults for compact memory.
+    data_dir = root / "data"
+    state_dir = root / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    provider = os.environ.get("LLM_PROVIDER", "openai")
+    model_name = os.environ.get("LLM_MODEL", "gpt-4o-mini")
+    temperature = float(os.environ.get("LLM_TEMPERATURE", "0"))
+    # Mỗi provider lấy api_key từ một biến env khác nhau.
+    key_env = {
+        "openai": "OPENAI_API_KEY",
+        "gemini": "GEMINI_API_KEY",
+        "anthropic": "ANTHROPIC_API_KEY",
+        "openrouter": "OPENROUTER_API_KEY",
+        "custom": "CUSTOM_API_KEY",
+    }.get(provider, "OPENAI_API_KEY")
+    api_key = os.environ.get(key_env)
 
-    raise NotImplementedError("Students should implement load_config().")
+    # base_url chỉ cần cho custom (OpenAI-compatible) và ollama.
+    if provider == "custom":
+        base_url = os.environ.get("CUSTOM_BASE_URL")
+    elif provider == "ollama":
+        base_url = os.environ.get("OLLAMA_BASE_URL")
+    else:
+        base_url = None
+
+    model = ProviderConfig(
+        provider=provider,
+        model_name=model_name,
+        temperature=temperature,
+        api_key=api_key,
+        base_url=base_url,
+    )
+    judge_model = model  # judge dùng chung config với model chính
+
+    return LabConfig(
+        base_dir=root,
+        data_dir=data_dir,
+        state_dir=state_dir,
+        compact_threshold_tokens=800,
+        compact_keep_messages=4,
+        model=model,
+        judge_model=judge_model,
+    )

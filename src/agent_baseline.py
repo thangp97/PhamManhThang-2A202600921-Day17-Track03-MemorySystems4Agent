@@ -33,43 +33,60 @@ class BaselineAgent:
         self.langchain_agent = None
 
     def reply(self, user_id: str, thread_id: str, message: str) -> dict[str, Any]:
-        """Student TODO: return the agent response and token accounting.
+        """Trả về phản hồi + hạch toán token.
 
-        Pseudocode:
-        - If a live agent exists, call the live path.
-        - Otherwise use a deterministic offline path.
+        Baseline chỉ có một đường offline tất định. `user_id` bị bỏ qua có chủ ý:
+        baseline KHÔNG dùng hồ sơ người dùng, chỉ nhớ trong phạm vi `thread_id`.
         """
 
-        raise NotImplementedError
+        return self._reply_offline(thread_id, message)
 
     def token_usage(self, thread_id: str) -> int:
-        # TODO: return cumulative agent token count for one thread.
-        raise NotImplementedError
+        # Tổng token agent đã sinh trong thread này (0 nếu thread chưa tồn tại).
+        sess = self.sessions.get(thread_id)
+        return sess.token_usage if sess else 0
 
     def prompt_token_usage(self, thread_id: str) -> int:
-        # TODO: estimate how much prompt context this baseline kept processing.
-        raise NotImplementedError
+        # Lượng ngữ cảnh prompt baseline phải xử lý dồn lại qua các lượt.
+        sess = self.sessions.get(thread_id)
+        return sess.prompt_tokens_processed if sess else 0
 
     def compaction_count(self, thread_id: str) -> int:
         # Baseline has no compact memory.
         return 0
 
     def _reply_offline(self, thread_id: str, message: str) -> dict[str, Any]:
-        """Student TODO: implement a simple offline behavior.
+        """Hành vi offline đơn giản, "ngây thơ" có chủ ý.
 
-        Suggested behavior:
-        - Store the new user message in the session
-        - Generate a short deterministic reply
-        - Update token counts
-        - Never remember facts across different thread ids
+        - Lưu message vào session của ĐÚNG thread đó.
+        - prompt context = toàn bộ history thread -> phình dần theo độ dài.
+        - Reply tất định, KHÔNG truy xuất fact của thread/khác session.
         """
 
-        raise NotImplementedError
+        sess = self.sessions.setdefault(thread_id, SessionState())
+        sess.messages.append({"role": "user", "content": message})
+
+        # Baseline kéo lại TOÀN BỘ lịch sử thread mỗi lượt -> chi phí prompt tăng dần.
+        prompt_tokens = sum(estimate_tokens(m["content"]) for m in sess.messages)
+        sess.prompt_tokens_processed += prompt_tokens
+
+        reply = f"Mình đã ghi nhận: {message}"
+        sess.messages.append({"role": "assistant", "content": reply})
+
+        agent_tokens = estimate_tokens(reply)
+        sess.token_usage += agent_tokens
+
+        return {
+            "reply": reply,
+            "agent_tokens": agent_tokens,
+            "prompt_tokens": prompt_tokens,
+        }
 
     def _maybe_build_langchain_agent(self):
-        """Student TODO: optionally wire `create_agent` + `InMemorySaver` here.
+        """Tùy chọn: dựng agent LangChain thật khi đã cài dependency.
 
-        Use `build_chat_model(self.config.model)` so the baseline can run with any supported provider.
+        Dùng `build_chat_model(self.config.model)` để chạy với provider bất kỳ.
+        Bản offline đã đủ cho benchmark/test nên phần này để trống an toàn.
         """
 
-        raise NotImplementedError
+        return None
