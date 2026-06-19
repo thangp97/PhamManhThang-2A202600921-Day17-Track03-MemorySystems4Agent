@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+import tempfile
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -146,11 +147,15 @@ def format_rows(rows: list[BenchmarkRow]) -> str:
 
 def _run_suite(title: str, dataset_path: Path, config) -> None:
     conversations = load_conversations(dataset_path)
-    # Agent mới mỗi suite để state không rò rỉ giữa các benchmark.
-    rows = [
-        run_agent_benchmark("Baseline", BaselineAgent(config=config, force_offline=True), conversations, config),
-        run_agent_benchmark("Advanced", AdvancedAgent(config=config, force_offline=True), conversations, config),
-    ]
+    # State cô lập (thư mục tạm) cho mỗi suite: benchmark tái lập được và KHÔNG
+    # ghi đè/tích lũy vào `state/` thật — nếu không, `User.md` còn sót từ lần chạy
+    # trước sẽ làm số token trôi qua mỗi lần chạy lại.
+    with tempfile.TemporaryDirectory(prefix="bench_state_") as tmp_state:
+        suite_config = replace(config, state_dir=Path(tmp_state))
+        rows = [
+            run_agent_benchmark("Baseline", BaselineAgent(config=suite_config, force_offline=True), conversations, suite_config),
+            run_agent_benchmark("Advanced", AdvancedAgent(config=suite_config, force_offline=True), conversations, suite_config),
+        ]
     print(f"\n## {title}\n")
     print(format_rows(rows))
 

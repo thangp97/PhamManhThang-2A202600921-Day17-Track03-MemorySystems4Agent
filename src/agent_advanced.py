@@ -1,11 +1,19 @@
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from typing import Any
 
 from config import LabConfig, load_config
-from memory_store import CompactMemoryManager, UserProfileStore, estimate_tokens, extract_profile_updates
+from memory_store import (
+    CompactMemoryManager,
+    ExtractedFact,
+    ProfileFact,
+    UserProfileStore,
+    estimate_tokens,
+    extract_profile_updates,
+    format_profile_markdown,
+    parse_profile_markdown,
+)
 from model_provider import build_chat_model
 
 
@@ -34,6 +42,9 @@ class AdvancedAgent:
         )
         self.thread_tokens: dict[str, int] = {}
         self.thread_prompt_tokens: dict[str, int] = {}
+        # Đồng hồ logic theo từng user (không dùng wall-clock để vẫn tái lập được).
+        # Dùng làm mốc tính memory decay cho fact trong User.md.
+        self.turn_counter: dict[str, int] = {}
 
         # TODO: optionally initialize a real LangChain/LangGraph agent.
         self.langchain_agent = None
@@ -55,43 +66,59 @@ class AdvancedAgent:
     def compaction_count(self, thread_id: str) -> int:
         return self.compact_memory.compaction_count(thread_id)
 
-    # ----- Quản lý fact trong User.md (upsert theo field) -----
+    # ----- Quản lý fact trong User.md (confidence + conflict + decay) -----
 
-    def _parse_facts(self, user_id: str) -> dict[str, str]:
-        """Đọc User.md, parse các dòng `- key: value` thành dict."""
-        facts: dict[str, str] = {}
-        for line in self.profile_store.read_text(user_id).splitlines():
-            m = re.match(r"-\s*([A-Za-z_]+):\s*(.+)", line)
-            if m:
-                facts[m.group(1)] = m.group(2).strip()
-        return facts
+    def _load_facts(self, user_id: str) -> dict[str, ProfileFact]:
+        return parse_profile_markdown(self.profile_store.read_text(user_id))
 
-    def _write_facts(self, user_id: str, facts: dict[str, str]) -> None:
-        """Ghi lại toàn bộ fact ra User.md dưới dạng markdown."""
-        lines = ["# User Profile", ""]
-        lines += [f"- {key}: {value}" for key, value in facts.items()]
-        self.profile_store.write_text(user_id, "\n".join(lines) + "\n")
+    def _save_facts(self, user_id: str, facts: dict[str, ProfileFact]) -> None:
+        self.profile_store.write_text(user_id, format_profile_markdown(facts))
 
-    def _persist_facts(self, user_id: str, updates: dict[str, str]) -> None:
-        """Upsert: fact mới ghi đè fact cũ cùng field (xử lý đính chính)."""
-        facts = self._parse_facts(user_id)
+    def _persist_facts(
+        self, user_id: str, updates: dict[str, ExtractedFact], turn: int
+    ) -> None:
+        """Hợp nhất fact mới vào User.md với 3 bonus:
+
+        - Confidence threshold: bỏ fact dưới ngưỡng (nhiễu, câu đùa).
+        - Reinforcement (chống decay): nhắc lại fact cũ -> tăng mentions, làm mới mốc.
+        - Conflict handling: đính chính chỉ ghi đè khi fact mới đủ tin cậy so với
+          fact cũ (đã trừ decay); KHÔNG giữ đồng thời giá trị cũ sai.
+        """
+        facts = self._load_facts(user_id)
         changed = False
-        for key, value in updates.items():
-            if facts.get(key) != value:
-                facts[key] = value
+        for key, ef in updates.items():
+            if ef.confidence < self.config.confidence_threshold:
+                continue  # confidence threshold
+            existing = facts.get(key)
+            if existing is None:
+                facts[key] = ProfileFact(ef.value, ef.confidence, mentions=1, last_turn=turn)
                 changed = True
+            elif existing.value == ef.value:
+                existing.mentions += 1
+                existing.last_turn = turn
+                existing.confidence = max(existing.confidence, ef.confidence)
+                changed = True
+            else:
+                old_eff = existing.effective_confidence(turn, self.config.decay_rate)
+                if ef.confidence >= old_eff:  # correction thắng fact cũ đã phai
+                    facts[key] = ProfileFact(ef.value, ef.confidence, mentions=1, last_turn=turn)
+                    changed = True
         if changed:
-            self._write_facts(user_id, facts)
+            self._save_facts(user_id, facts)
 
     # ----- Đường offline -----
 
     def _reply_offline(self, user_id: str, thread_id: str, message: str) -> dict[str, Any]:
         """Đường advanced tất định với đủ 3 lớp memory."""
 
-        # 1 + 2. Bóc fact ổn định và lưu bền vững vào User.md.
+        # Tăng đồng hồ logic của user (mốc tính decay).
+        turn = self.turn_counter.get(user_id, 0) + 1
+        self.turn_counter[user_id] = turn
+
+        # 1 + 2. Bóc fact ổn định (kèm confidence) và lưu bền vững vào User.md.
         updates = extract_profile_updates(message)
         if updates:
-            self._persist_facts(user_id, updates)
+            self._persist_facts(user_id, updates, turn)
 
         # 3. Đưa message người dùng vào compact memory (short-term + nén).
         self.compact_memory.append(thread_id, "user", message)
@@ -138,7 +165,7 @@ class AdvancedAgent:
 
     def _offline_response(self, user_id: str, thread_id: str, message: str) -> str:
         """Trả lời tất định bằng cách tra fact đã lưu trong User.md."""
-        facts = self._parse_facts(user_id)
+        facts = self._load_facts(user_id)
         if not facts:
             return "Mình chưa có thông tin nào về bạn."
 
@@ -146,11 +173,18 @@ class AdvancedAgent:
         matched: list[tuple[str, str]] = []
         for key, keywords in self._FIELD_KEYWORDS.items():
             if key in facts and any(kw in low for kw in keywords):
-                matched.append((key, facts[key]))
+                matched.append((key, facts[key].value))
 
-        # Không khớp field nào -> trả về toàn bộ fact đã biết.
+        # Không khớp field nào -> trả về toàn bộ fact, ưu tiên fact "nổi" nhất
+        # (tin cậy hiệu dụng cao: tin cậy gốc * reinforcement / decay).
         if not matched:
-            matched = list(facts.items())
+            turn = self.turn_counter.get(user_id, 0)
+            ordered = sorted(
+                facts.items(),
+                key=lambda kv: kv[1].effective_confidence(turn, self.config.decay_rate),
+                reverse=True,
+            )
+            matched = [(key, fact.value) for key, fact in ordered]
 
         parts = "; ".join(f"{key}: {value}" for key, value in matched)
         return "Theo những gì mình nhớ -> " + parts + "."

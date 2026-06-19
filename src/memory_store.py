@@ -63,71 +63,193 @@ class UserProfileStore:
         return path.stat().st_size if path.exists() else 0
 
 
-def extract_profile_updates(message: str) -> dict[str, str]:
-    """Student TODO: convert raw user text into stable profile facts.
+@dataclass
+class ExtractedFact:
+    """Một fact vừa bóc ra từ message, kèm độ tin cậy [0..1].
 
-    Example facts you may want to extract:
-    - name
-    - location
-    - profession
-    - preferences / response style
-    - favorite food / drink
-
-    Pseudocode:
-    1. Build a few regex patterns.
-    2. Skip obvious question-only turns.
-    3. Return only the facts that are confidently present in the message.
+    `confidence` là đầu vào cho bonus *confidence threshold* và *conflict
+    handling*: clause có dấu hiệu phủ định / đùa cợt sẽ bị hạ tin cậy mạnh nên
+    không được ghi vào `User.md`.
     """
 
-    text = message.strip()
-    low = text.lower()
+    value: str
+    confidence: float
 
-    # 1. Bỏ qua câu HỎI: không trích fact từ câu người dùng đang hỏi lại.
-    question_markers = (
-        "?", "là gì", "ở đâu", "thế nào", "bao nhiêu",
-        "khi nào", "nhắc lại", "nhớ lại", "có thể nhắc",
-    )
-    if any(marker in low for marker in question_markers):
+
+# Dấu hiệu cho thấy clause KHÔNG khẳng định một fact ổn định (đùa, nhiễu, đính
+# chính cái cũ). Có bất kỳ marker nào -> hạ mạnh độ tin cậy của fact trong clause.
+_NEGATION_MARKERS = (
+    "không phải", "chỉ là", "đùa", "lúc đầu", "trước đó", "đừng",
+    "vừa bay", "gây nhiễu", "hay là chuyển", "tưởng",
+)
+# Dấu hiệu fact là trạng thái HIỆN TẠI / ổn định -> tăng nhẹ độ tin cậy.
+_AFFIRM_MARKERS = (
+    "hiện tại", "hiện ", "đang ", "từ tuần này", "nơi ở hiện tại",
+    "vẫn là", "vẫn giữ", "thực ra",
+)
+_QUESTION_MARKERS = (
+    "?", "là gì", "ở đâu", "thế nào", "bao nhiêu",
+    "khi nào", "nhắc lại", "nhớ lại", "có thể nhắc", "đâu mới",
+)
+# Độ tin cậy nền theo từng field (pattern càng rõ -> nền càng cao).
+_BASE_CONFIDENCE = {
+    "name": 0.9,
+    "location": 0.8,
+    "profession": 0.8,
+    "drink": 0.75,
+    "style": 0.7,
+}
+
+
+def _split_clauses(message: str) -> list[str]:
+    """Tách message thành các clause nhỏ để chấm tin cậy theo ngữ cảnh cục bộ.
+
+    Cắt theo câu (. ! ? xuống dòng) rồi theo dấu phẩy và liên từ "nhưng" — nhờ
+    vậy "Lúc đầu mình nói ở Huế, nhưng thực ra ... ở Đà Nẵng" tách được phần
+    đính chính (Huế) khỏi phần hiện tại (Đà Nẵng).
+    """
+    parts = re.split(r"[.!?\n]|(?:\bnhưng\b)|,", message)
+    return [p.strip() for p in parts if p.strip()]
+
+
+def _score(field: str, clause_low: str) -> float:
+    conf = _BASE_CONFIDENCE[field]
+    if any(mark in clause_low for mark in _NEGATION_MARKERS):
+        conf *= 0.25  # nhiễu / đùa / đính chính cũ -> rơi xuống dưới ngưỡng
+    elif any(mark in clause_low for mark in _AFFIRM_MARKERS):
+        conf = min(0.99, conf + 0.1)
+    return conf
+
+
+def extract_profile_updates(message: str) -> dict[str, ExtractedFact]:
+    """Bóc các fact ổn định kèm độ tin cậy.
+
+    Quy trình:
+    1. Bỏ qua câu hỏi (không lưu fact từ câu người dùng đang hỏi lại).
+    2. Tách clause, chạy regex từng field trên mỗi clause.
+    3. Chấm tin cậy theo marker phủ định/khẳng định trong clause.
+    4. Mỗi field giữ ứng viên có tin cậy cao nhất trong message.
+    """
+
+    if any(marker in message.lower() for marker in _QUESTION_MARKERS):
         return {}
 
-    facts: dict[str, str] = {}
+    best: dict[str, ExtractedFact] = {}
 
-    # 2. name: "mình tên là DũngCT"
-    m = re.search(r"tên(?:\s+mình)?\s+là\s+([A-Za-zÀ-ỹ0-9]+)", text, re.I)
-    if m:
-        facts["name"] = m.group(1).strip(" .")
+    def offer(field: str, value: str, clause_low: str) -> None:
+        value = value.strip(" .,:")
+        if not value:
+            return
+        conf = _score(field, clause_low)
+        cur = best.get(field)
+        if cur is None or conf > cur.confidence:
+            best[field] = ExtractedFact(value=value, confidence=conf)
 
-    # 3. location: yêu cầu có chủ ngữ trước "ở" (mình/tôi/đang/giờ) để tránh
-    #    bắt nhầm "nơi ở đã thay đổi". Lưu ý: dải À-Ỹ gồm cả chữ thường có dấu,
-    #    nên không thể dựa vào "chữ Hoa" để lọc — phải neo bằng ngữ cảnh.
-    m = re.search(
-        r"(?:mình|tôi|giờ|hiện(?: tại)?|đang)\s+(?:đang\s+)?ở\s+([A-Za-zÀ-ỹ]+(?:\s+[A-Za-zÀ-ỹ]+)?)",
-        text, re.I,
-    )
-    if m:
-        facts["location"] = m.group(1).strip(" .")
+    for clause in _split_clauses(message):
+        low = clause.lower()
 
-    # 4. profession: "đang làm backend engineer cho startup AI"
-    m = re.search(r"làm\s+([A-Za-zÀ-ỹ ]+?)\s+(?:cho|tại|ở)\b", text, re.I)
-    if m:
-        facts["profession"] = m.group(1).strip(" .")
+        # name: "mình tên là DũngCT Stress" (cho phép 1-3 token để bắt tên ghép)
+        m = re.search(
+            r"tên(?:\s+mình)?\s+là\s+([A-Za-zÀ-ỹ0-9]+(?:\s+[A-Za-zÀ-ỹ0-9]+){0,2})",
+            clause, re.I,
+        )
+        if m:
+            offer("name", m.group(1), low)
 
-    # 5. drink: "đồ uống yêu thích là cà phê sữa đá" / "uống cà phê sữa đá như cũ"
-    m = re.search(r"(?:đồ uống|thức uống)[^.]*?là\s+([A-Za-zÀ-ỹ ]+)", text, re.I)
-    if not m:
-        m = re.search(r"\buống\s+([A-Za-zÀ-ỹ ]+?)(?:\s+như cũ|\.|$)", text, re.I)
-    if m:
-        facts["drink"] = m.group(1).strip(" .")
+        # location: cần chủ ngữ/ngữ cảnh trước "ở" để tránh bắt nhầm.
+        m = re.search(
+            r"(?:mình|tôi|giờ|hiện(?: tại)?|đang|việc)\s+(?:đang\s+)?(?:làm việc\s+)?ở\s+"
+            r"([A-Za-zÀ-ỹ]+(?:\s+[A-Za-zÀ-ỹ]+)?)",
+            clause, re.I,
+        )
+        if m:
+            offer("location", m.group(1), low)
 
-    # 6. style: "trả lời ngắn gọn, rõ ý và có ví dụ thực tế".
-    #    Bỏ qua capture quá ngắn hoặc chỉ là đại từ (vd "mình thích", "gọn").
-    m = re.search(r"trả lời\s+([A-Za-zÀ-ỹ ,]+)", text, re.I)
-    if m:
-        style = m.group(1).strip(" .,")
-        if len(style) >= 6 and not style.lower().startswith(("mình", "tôi", "bạn", "thành")):
-            facts["style"] = style
+        # profession: "đang làm MLOps engineer cho ..." hoặc "nghề ... là MLOps engineer"
+        m = re.search(r"làm\s+([A-Za-zÀ-ỹ ]+?)\s+(?:cho|tại|ở)\b", clause, re.I)
+        if m:
+            offer("profession", m.group(1), low)
+        m = re.search(r"nghề(?:\s+nghiệp)?[^:]*?\blà\s+([A-Za-zÀ-ỹ ]+)", clause, re.I)
+        if m:
+            offer("profession", m.group(1), low)
 
+        # drink
+        m = re.search(r"(?:đồ uống|thức uống)[^.]*?là\s+([A-Za-zÀ-ỹ ]+)", clause, re.I)
+        if not m:
+            m = re.search(r"\buống\s+([A-Za-zÀ-ỹ ]+?)(?:\s+như cũ|$)", clause, re.I)
+        if m:
+            offer("drink", m.group(1), low)
+
+        # style: "trả lời ngắn gọn thành 3 bullet" (cho phép cả chữ số).
+        m = re.search(r"trả lời\s+([A-Za-zÀ-ỹ0-9 ]+)", clause, re.I)
+        if m:
+            style = m.group(1).strip(" .,")
+            if len(style) >= 6 and not style.lower().startswith(
+                ("mình", "tôi", "bạn", "thành", "cũng", "vẫn", "như", "đã")
+            ):
+                offer("style", style, low)
+
+    return best
+
+
+@dataclass
+class ProfileFact:
+    """Fact bền vững trong `User.md` kèm metadata cho bonus decay/conflict.
+
+    - `confidence`: độ tin cậy lúc ghi.
+    - `mentions`: số lần fact này được nhắc lại (reinforcement chống decay).
+    - `last_turn`: lượt gần nhất fact được xác nhận (mốc tính decay).
+    """
+
+    value: str
+    confidence: float = 0.0
+    mentions: int = 1
+    last_turn: int = 0
+
+    def effective_confidence(self, current_turn: int, decay_rate: float) -> float:
+        """Tin cậy hiệu dụng: giảm theo số lượt im lặng, tăng theo số lần nhắc lại."""
+        idle = max(0, current_turn - self.last_turn)
+        reinforcement = 1.0 + 0.15 * (self.mentions - 1)
+        return self.confidence * (decay_rate ** idle) * reinforcement
+
+
+# Dòng fact trong User.md: "- key: value  <!-- conf=0.90 mentions=2 turn=5 -->".
+# Metadata để trong HTML comment nên file vẫn đọc được như markdown thường.
+_FACT_LINE = re.compile(
+    r"-\s*([A-Za-z_]+):\s*(.+?)"
+    r"(?:\s*<!--\s*conf=([\d.]+)\s+mentions=(\d+)\s+turn=(\d+)\s*-->)?\s*$"
+)
+
+
+def parse_profile_markdown(text: str) -> dict[str, ProfileFact]:
+    """Đọc `User.md` thành dict field -> ProfileFact (tương thích cả dòng cũ không metadata)."""
+    facts: dict[str, ProfileFact] = {}
+    for line in text.splitlines():
+        m = _FACT_LINE.match(line)
+        if not m:
+            continue
+        key, value, conf, mentions, turn = m.groups()
+        if conf is None:
+            facts[key] = ProfileFact(value=value.strip())
+        else:
+            facts[key] = ProfileFact(
+                value=value.strip(),
+                confidence=float(conf),
+                mentions=int(mentions),
+                last_turn=int(turn),
+            )
     return facts
+
+
+def format_profile_markdown(facts: dict[str, ProfileFact]) -> str:
+    """Ghi dict ProfileFact ra markdown `User.md`."""
+    lines = ["# User Profile", ""]
+    for key, fact in facts.items():
+        lines.append(
+            f"- {key}: {fact.value}  "
+            f"<!-- conf={fact.confidence:.2f} mentions={fact.mentions} turn={fact.last_turn} -->"
+        )
+    return "\n".join(lines) + "\n"
 
 
 def summarize_messages(messages: list[dict[str, str]], max_items: int = 6) -> str:

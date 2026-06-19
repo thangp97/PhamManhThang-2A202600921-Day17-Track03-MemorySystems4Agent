@@ -6,7 +6,7 @@ from pathlib import Path
 from agent_advanced import AdvancedAgent
 from agent_baseline import BaselineAgent
 from config import load_config
-from memory_store import UserProfileStore
+from memory_store import ProfileFact, UserProfileStore, extract_profile_updates
 
 
 def make_config(tmp_path: Path):
@@ -147,3 +147,64 @@ def test_compact_reduces_prompt_load_on_long_thread(tmp_path: Path) -> None:
 
     # Và tổng prompt tokens xử lý qua cả thread của Advanced cũng thấp hơn Baseline.
     assert advanced.prompt_token_usage(thread_id) < baseline.prompt_token_usage(thread_id)
+
+
+# ===================== Bonus features =====================
+
+
+def test_entity_extraction_returns_confidence() -> None:
+    """extract_profile_updates bóc fact nhiều từ kèm độ tin cậy; bỏ qua câu hỏi."""
+
+    facts = extract_profile_updates(
+        "Mình tên là DũngCT Stress, hiện đang ở Đà Nẵng và đang làm MLOps engineer cho team."
+    )
+    assert facts["name"].value == "DũngCT Stress"
+    assert facts["location"].value == "Đà Nẵng"
+    assert facts["profession"].value == "MLOps engineer"
+    assert facts["name"].confidence >= 0.6
+
+    # Câu hỏi không sinh fact.
+    assert extract_profile_updates("Tên mình là gì?") == {}
+
+
+def test_confidence_threshold_rejects_noise(tmp_path: Path) -> None:
+    """Fact đủ chắc được ghi; câu nhiễu/đùa (tin cậy thấp) KHÔNG ghi đè."""
+
+    config = make_config(tmp_path)
+    agent = AdvancedAgent(config=config, force_offline=True)
+    uid = "u-noise"
+
+    agent.reply(uid, "t", "Mình hiện đang ở Đà Nẵng.")
+    assert agent._load_facts(uid)["location"].value == "Đà Nẵng"
+
+    # Có marker phủ định ("lúc đầu", "chỉ là") -> tin cậy dưới ngưỡng -> bỏ qua.
+    agent.reply(uid, "t", "Lúc đầu mình ở Huế nhưng đó chỉ là chuyện cũ.")
+    assert agent._load_facts(uid)["location"].value == "Đà Nẵng"
+
+
+def test_conflict_handling_updates_not_duplicates(tmp_path: Path) -> None:
+    """Đính chính rõ ràng cập nhật fact và KHÔNG giữ lại giá trị cũ sai."""
+
+    config = make_config(tmp_path)
+    agent = AdvancedAgent(config=config, force_offline=True)
+    uid = "u-conflict"
+
+    agent.reply(uid, "t", "Mình hiện đang ở Huế.")
+    assert agent._load_facts(uid)["location"].value == "Huế"
+
+    agent.reply(uid, "t", "Thực ra từ tuần này mình đang ở Đà Nẵng.")
+    assert agent._load_facts(uid)["location"].value == "Đà Nẵng"
+    # Giá trị cũ sai không còn tồn tại trong User.md.
+    assert "Huế" not in agent.profile_store.read_text(uid)
+
+
+def test_memory_decay_and_reinforcement() -> None:
+    """Tin cậy hiệu dụng giảm theo lượt im lặng và tăng theo số lần nhắc lại."""
+
+    fact = ProfileFact("MLOps engineer", confidence=0.8, mentions=1, last_turn=5)
+    # Decay: để lâu không nhắc -> tin cậy hiệu dụng giảm.
+    assert fact.effective_confidence(5, 0.9) > fact.effective_confidence(12, 0.9)
+
+    # Reinforcement: nhắc lại nhiều lần -> tin cậy hiệu dụng cao hơn fact chỉ nhắc 1 lần.
+    reinforced = ProfileFact("MLOps engineer", confidence=0.8, mentions=4, last_turn=5)
+    assert reinforced.effective_confidence(5, 0.9) > fact.effective_confidence(5, 0.9)

@@ -24,6 +24,11 @@ class LabConfig:
     compact_keep_messages: int
     model: ProviderConfig
     judge_model: ProviderConfig
+    # Bonus knobs (xem ANALYSIS.md mục Bonus):
+    # - confidence_threshold: chỉ ghi fact vào User.md khi đủ chắc chắn.
+    # - decay_rate: hệ số giảm độ tin cậy của fact theo số lượt không được nhắc lại.
+    confidence_threshold: float = 0.6
+    decay_rate: float = 0.9
 
 
 def load_config(base_dir: Path | None = None) -> LabConfig:
@@ -84,4 +89,6 @@ def load_config(base_dir: Path | None = None) -> LabConfig:
         compact_keep_messages=4,
         model=model,
         judge_model=judge_model,
+        confidence_threshold=float(os.environ.get("MEMORY_CONFIDENCE_THRESHOLD", "0.6")),
+        decay_rate=float(os.environ.get("MEMORY_DECAY_RATE", "0.9")),
     )
